@@ -2,47 +2,28 @@
 
 Tags: #concept #simfile #implementation
 
-Parsing a `.dtx` file effectively requires a multi-pass approach to handle its declarative structure. A robust parser can be broken down into a few key phases.
+Parsing a `.dtx` file effectively requires handling its declarative structure, where resources like sounds and images might be referenced by channels before they are defined. A common approach is a two-pass system, but the DTXMania engine uses a more complex and efficient single-pass strategy.
 
 ---
 
-## Phase 1: Header & Resource Pass
+## Single-Pass Parsing with Forward-Reference Resolution
 
-First, iterate through the file line by line, focusing only on lines that start with `#`.
+The parser iterates through the file line by line just once.
 
-1.  **Identify Command**: Extract the command (e.g., `TITLE`, `WAV01`, `BPM`).
-2.  **Store Data**:
-    *   If it's a metadata command ([[Header Commands]]), store the value in a general song properties object.
-    *   If it's a resource command ([[Resource Mapping]]), add the entry to a resource table (e.g., a dictionary mapping `01` to `kick.wav`).
-    *   If it's a global setting like `#BPM`, store it as the initial value.
+1.  **Line-by-Line Analysis**: The engine reads each line and determines if it is a header command, a resource definition, or channel data.
 
-At the end of this pass, you should have all the metadata and a complete map of all external assets, but no note data.
+2.  **Immediate Header/Resource Processing**:
+    *   Metadata commands (`#TITLE`, `#ARTIST`, etc.) are stored immediately.
+    *   Resource definitions (`#WAVxx`, `#BMPxx`, etc.) are added to their respective lists. The engine assigns a unique internal ID to each new resource.
 
-## Phase 2: Body & Channel Pass
+3.  **Chip and Event Handling**:
+    *   When channel data (`#xxxCC: ...`) is encountered, the objects are parsed.
+    *   For each object, a "chip" is created and added to a master list (`listChip`).
+    *   **Forward-Reference Handling**: If a chip references a resource ID (e.g., WAV `01`) that has not been defined yet, the chip is still created. It's temporarily assigned a negative or placeholder internal ID. Later, when the actual `#WAV01` definition is parsed, the engine iterates back through the chip list to update all chips that were waiting for that definition, replacing the placeholder with the correct internal ID.
 
-Now, iterate through the file again. This time, focus on the [[Channel Data]] lines (`#xxxCC: ...`).
+4.  **Post-Processing**: After the entire file is read, the master chip list is sorted by timestamp. Then, final calculations like precise event timing (factoring in BPM changes) are performed on the complete, ordered list of events.
 
-1.  **Identify Measure and Channel**: For each line, parse the measure number (`xxx`) and the channel ID (`CC`).
-2.  **Parse Objects**: Read the data string. Iterate through it, taking two characters at a time to get the object IDs.
-3.  **Create Timed Events**: For each non-`00` object, calculate its precise timestamp within the song. This requires knowing:
-    *   The current BPM.
-    *   The current measure's length (which can be modified by channel `02`).
-    *   The object's position within the measure.
-4.  **Store Events**: Store these timed events in a structured list. Each event should contain, at a minimum:
-    *   `Timestamp (ms)`
-    *   `Channel ID`
-    *   `Object ID`
-    *   `Resource Path` (looked up from the resource table)
-
-## Data Structures
-
-*   **SongInfo**: A class/struct to hold all metadata (`Title`, `Artist`, etc.).
-*   **ResourceTable**: A `Dictionary<string, string>` or `HashMap` for resource mappings.
-*   **EventList**: A `List<GameEvent>` where `GameEvent` is a class/struct holding the timed event data.
-
-After these two passes, you will have a clean, ordered list of all game events, ready to be consumed by the [[🎮 Gameplay Engine MOC]] and [[🔊 Audio System MOC]].
-
----
+This single-pass method avoids reading the file multiple times but requires careful management of internal IDs and placeholders to resolve forward references correctly.
 
 ## Implementation Details & Best Practices
 
@@ -54,7 +35,7 @@ When you calculate the beat position (`item_index / resolution`), you should the
 
 ### Character Encoding
 
-Many legacy simfiles, especially those created with Japanese tools, use **Shift_JIS** character encoding. A parser that only supports UTF-8 may fail to read metadata correctly, resulting in garbled text for titles and artist names. When reading the file, it's a safe practice to try parsing with Shift_JIS if UTF-8 fails, or to provide a configuration option for the user.
+Many legacy simfiles, especially those created with Japanese tools, use **Shift_JIS** character encoding. The `CDTX.cs` implementation explicitly reads files using this encoding. A parser that only supports UTF-8 may fail to read metadata correctly, resulting in garbled text for titles and artist names.
 
 ---
 

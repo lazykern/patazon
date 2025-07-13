@@ -26,7 +26,7 @@ The guide also specifies `#BMPTEXxx`, which is flagged to be loaded as a rendera
 
 ## Video Resources (`#AVI`)
 
-Similar to other resources, `#AVIxx` maps an ID to a video file.
+Similar to other resources, `#AVIxx` maps an ID to a video file. The command `#VIDEOxx` is a common alias.
 
 *   **Syntax**: `#AVIxx: <filename.avi>`
 *   **Example**: `#AVI01: intro_movie.avi`
@@ -37,6 +37,24 @@ Instead of just changing the BPM directly, the DTX format allows for defining a 
 
 *   **Syntax**: `#BPMxx: <BPM value>`
 *   **Example**: `#BPM01: 220.5`
+
+### Example from a file
+
+The following is a snippet from a real `.dtx` file showing how various resources are mapped. Note that `#BMPxx` is not used in this particular file, but its syntax is identical to `#WAVxx`.
+
+```dtx
+; Audio Resources
+#WAV0C: GAV-CHIHAT1.ogg
+#WAV0K: GAV-SNARE2.ogg
+#WAV0U: GAV-KICK2.ogg
+
+; Video Resources
+#AVI01: Toe - Goodbye.mp4
+
+; BPM Resources
+#BPM01: 136.6742
+#BPM02: 137.2997
+```
 
 ## The Resource Table
 
@@ -54,6 +72,19 @@ A parser should build a data structure—often a dictionary or hash map—to sto
 
 
 This table is essential for translating the abstract IDs in the channel data into concrete assets to be used by the [[🔊 Audio System MOC|audio]] and rendering engines.
+
+An example based on the snippet above would look like this:
+
+| ID | Type | Value / File Path |
+|---|---|---|
+| `0C`| `WAV` | `GAV-CHIHAT1.ogg` |
+| `0K`| `WAV` | `GAV-SNARE2.ogg` |
+| `0U`| `WAV` | `GAV-KICK2.ogg` |
+| `01`| `AVI` | `Toe - Goodbye.mp4` |
+| `B1`| `BPM` | `136.6742` |
+| `B2`| `BPM` | `137.2997` |
+
+*(Note: The original file used IDs `01` and `02` for its BPMs, but we've used `B1` and `B2` here for clarity to show how different resource types have their own ID mappings.)*
 
 ---
 

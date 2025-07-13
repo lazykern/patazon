@@ -25,6 +25,19 @@ These commands are **editor-specific metadata**. Their purpose is to save the st
 
 Recognizing these commands is a mark of a mature parser that is resilient to real-world file variations.
 
+### Example
+
+The following lines are taken from the end of `goodbye-mas.dtx`. They store metadata about the editor's UI state, such as the colors used for displaying different WAV files in the editor's list. These should be ignored by a game engine.
+
+```dtx
+#DTXC_WAVBACKCOLOR: 2 #E0FFE0
+#DTXC_WAVBACKCOLOR: 4 #FF4780
+#DTXC_WAVBACKCOLOR: 5 #FF3D79
+#DTXC_WAVBACKCOLOR: 54 #C2C2C2
+#DTXC_WAVBACKCOLOR: 55 #BEBEBE
+#DTXC_CHIPPALETTE: 
+```
+
 ---
 
 ### Related

@@ -35,6 +35,8 @@ Beyond the standard metadata and channel data, DTX files can contain special com
 
 In this example, the engine would generate a random number between 1 and 2 (inclusive). If the number is 1, only the commands inside the `#IF 1` block are parsed. If it's 2, only the commands in the `#IF 2` block are parsed. This allows charters to create different patterns that can change on each playthrough. A parser must implement this conditional logic to correctly interpret the chart.
 
+*(Note: These conditional commands are a feature of the DTXMania player engine and are not supported by all editors. The provided example simfiles also do not use them.)*
+
 ---
 
 ### Related
