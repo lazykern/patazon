@@ -40,7 +40,7 @@ class Dtx:
         self.wav_files = {}  # Maps WAV ID (str) to its file path
         self.bpm_changes = {} # Maps BPM ID (str) to a BPM value (float)
         self.bar_length_changes = {} # Maps bar number to a length multiplier (float)
-        self.wav_volumes = {} # Maps WAV ID to volume (0-100) from #WAVVOL
+        self.wav_volumes = {} # Maps WAV ID to volume (0-100) from #VOLUME
         self.bgm_wav_id = None
         
         # The final calculated event list
@@ -113,12 +113,12 @@ class Dtx:
             elif key.startswith('BPM') and len(key) > 3 and value:
                 try: self.bpm_changes[key[3:]] = float(value)
                 except ValueError: print(f"Warning: Invalid BPM change value '{value}'")
-            elif key.startswith('WAVVOL') and len(key) > 6 and value:
+            elif key.startswith('VOLUME') and len(key) > 6 and value:
                 wav_id = key[6:]
                 try:
                     self.wav_volumes[wav_id] = int(value)
                 except (ValueError, TypeError):
-                    print(f"Warning: Invalid WAVVOL value '{value}' for WAV ID {wav_id}")
+                    print(f"Warning: Invalid VOLUME value '{value}' for WAV ID {wav_id}")
             # Check for note/event data lines (e.g., #00108: ...)
             elif len(key) == 5 and re.match(r'^\d{3}[0-9A-Z]{2}$', key):
                 bar_num = int(key[0:3])
@@ -238,15 +238,15 @@ class Player:
     # --- Lane Configuration ---
     # Maps DTX channel ID to (x_center, color, name)
     LANES_CONFIG = {
-        '16': (SCREEN_WIDTH * 0.2, (220, 220, 0), "L.Cym"),  # Left Cymbal
+        '1A': (SCREEN_WIDTH * 0.2, (220, 220, 0), "L.Cym"),  # Left Cymbal
         '11': (SCREEN_WIDTH * 0.3, (0, 200, 200), "H.H."),  # Hi-Hat Closed
         '18': (SCREEN_WIDTH * 0.3, (0, 255, 255), "H.H. Open"),
-        '1B': (SCREEN_WIDTH * 0.3, (0, 150, 150), "H.H. Pedal"),
+        '1B': (SCREEN_WIDTH * 0.3, (255, 180, 40), "H.H. Pedal"),
         '12': (SCREEN_WIDTH * 0.4, (255, 80, 80), "Snare"),
         '14': (SCREEN_WIDTH * 0.5, (80, 255, 80), "H.Tom"),
         '17': (SCREEN_WIDTH * 0.6, (80, 80, 255), "F.Tom"),
         '19': (SCREEN_WIDTH * 0.7, (220, 0, 220), "Ride"),
-        '1A': (SCREEN_WIDTH * 0.8, (220, 220, 0), "R.Cym"), # Right Cymbal
+        '16': (SCREEN_WIDTH * 0.8, (220, 220, 0), "R.Cym"), # Right Cymbal
     }
     KICK_CHANNEL = '13'
     KICK_COLOR = (255, 128, 0)
@@ -270,8 +270,8 @@ class Player:
         self.hit_animations = [] # Stores recent note hits for visual feedback
         
         # --- Audio State Management ---
-        # For polyphony: Stores active channels for each sound file (wav_id).
-        # Structure: { wav_id: [ (channel_object, play_time_ms), ... ] }
+        # For polyphony: Stores active channels for each instrument lane.
+        # Structure: { channel_id: [ (channel_object, play_time_ms), ... ] }
         self.active_poly_sounds = {}
         
         # For choke logic: Stores the active channel for chokeable sounds.
@@ -553,24 +553,28 @@ class Player:
                     # 1. --- Choke Logic ---
                     # If this note is a "choker", stop any corresponding "choked" sounds.
                     if channel_id in self.CHOKE_MAP:
+                        choker_name = self.LANES_CONFIG.get(channel_id, (None, None, f"Channel {channel_id}"))[2]
                         for choked_channel_id in self.CHOKE_MAP[channel_id]:
                             if choked_channel_id in self.active_choke_sounds:
                                 channel_to_stop = self.active_choke_sounds[choked_channel_id]
                                 if channel_to_stop and channel_to_stop.get_busy():
+                                    choked_name = self.LANES_CONFIG.get(choked_channel_id, (None, None, f"Channel {choked_channel_id}"))[2]
+                                    print(f"CHOKE: Fading out '{choked_name}' because a new '{choker_name}' was hit.")
                                     channel_to_stop.fadeout(self.se_fade_out_ms)
                                 # Remove it from tracking since it's now choked
                                 del self.active_choke_sounds[choked_channel_id]
 
                     # 2. --- Polyphony & Playback Logic ---
-                    # Initialize a list for this sound if it's the first time we've seen it.
-                    if wav_id not in self.active_poly_sounds:
-                        self.active_poly_sounds[wav_id] = []
+                    # This logic now operates per channel, not per sound file.
+                    # Initialize a list for this channel if it's the first time we've seen it.
+                    if channel_id not in self.active_poly_sounds:
+                        self.active_poly_sounds[channel_id] = []
                     
-                    # Get the list of currently playing instances for this specific sound.
-                    playing_instances = self.active_poly_sounds[wav_id]
+                    # Get the list of currently playing instances for this specific channel.
+                    playing_instances = self.active_poly_sounds[channel_id]
                     
                     # Clean up any sounds in the list that have finished playing naturally.
-                    playing_instances = [ (ch, t) for (ch, t) in playing_instances if ch.get_busy() ]
+                    playing_instances = [ item for item in playing_instances if item[0].get_busy() ]
 
                     # Voice stealing: If we're at the polyphony limit, stop the oldest sound.
                     if len(playing_instances) >= self.POLYPHONY_LIMIT:
@@ -579,16 +583,30 @@ class Player:
                         # Get the channel of the oldest sound and remove it from our tracking list.
                         oldest_channel, _ = playing_instances.pop(0)
                         # Fade it out to free up a mixer channel.
-                        print(f"Fading out {oldest_channel} for {wav_id}")
                         oldest_channel.fadeout(self.se_fade_out_ms)
 
+                        # Explain why the sound is being faded out
+                        sound_name = self.LANES_CONFIG.get(channel_id, (None, None, f"Channel {channel_id}"))[2]
+                        print(f"POLYPHONY: Fading out oldest '{sound_name}' to play new one. Channel '{channel_id}' limit of {self.POLYPHONY_LIMIT} reached.")
+
                     # Play the new sound with a gentle fade-in.
+                    # The final volume combines the master SE volume and the per-WAV volume from the chart.
                     wav_vol_percent = self.dtx.wav_volumes.get(wav_id, 100)
-                    final_volume = self.se_volume * (wav_vol_percent / 100.0)
+                    note_vol_multiplier = wav_vol_percent / 100.0
+                    final_volume = self.se_volume * note_vol_multiplier
+                    
+                    # Set the volume on the Sound object itself right before playing.
+                    # This ensures the fade-in targets the correct final volume.
+                    sound_to_play.set_volume(final_volume)
                     new_channel = sound_to_play.play(fade_ms=self.se_fade_in_ms)
                     
                     if new_channel:
-                        new_channel.set_volume(final_volume)
+                        note_name = "Kick" if channel_id == self.KICK_CHANNEL else self.LANES_CONFIG.get(channel_id, (None, None, f"Channel {channel_id}"))[2]
+                        print(f"PLAY: Playing '{note_name}' (WAV ID: {wav_id}) at {current_time_ms / 1000.0:.3f}s [Vol: {final_volume:.2f}]")
+                        
+                        # The volume is now set on the Sound, so this is no longer needed.
+                        # new_channel.set_volume(final_volume)
+                        
                         # Add the new sound to our polyphony tracking list.
                         playing_instances.append( (new_channel, current_time_ms) )
                         
@@ -598,7 +616,7 @@ class Player:
                             self.active_choke_sounds[channel_id] = new_channel
 
                     # Update the master list of active sounds.
-                    self.active_poly_sounds[wav_id] = playing_instances
+                    self.active_poly_sounds[channel_id] = playing_instances
                         
                     # Add an animation for visual feedback
                     self.hit_animations.append({'channel_id': channel_id, 'time': current_time_ms})
