@@ -19,6 +19,23 @@ class Dtx:
     timing of all musical events, including notes and BPM changes.
     """
 
+    # Channels that do not represent playable notes and should be ignored
+    # when building the list of timed events. This includes visual and
+    # system channels for things like bar lines and BGA control.
+    NON_NOTE_CHANNELS = {
+        # Visual Layers & Control
+        "04", "07", "54", "5A", "C4", "C7",
+        "55", "56", "57", "58", "59", "60",
+        "D5", "D6", "D7", "D8", "D9", "DA", "DB", "DC", "DD", "DE", "DF",
+        # System (Bar lines, visibility toggles, etc.)
+        "50", "51", "C1", "C2",
+        # Sound Effect (SE) channels - these are autoplay sounds, not playable notes.
+        "61", "62", "63", "64", "65", "66", "67", "68", "69",
+        "70", "71", "72", "73", "74", "75", "76", "77", "78", "79",
+        "80", "81", "82", "83", "84", "85", "86", "87", "88", "89",
+        "90", "91", "92",
+    }
+
     def __init__(self, dtx_path):
         """
         Initializes the Dtx object with the path to the .dtx file.
@@ -45,6 +62,7 @@ class Dtx:
         self.bar_length_changes = {}  # Maps bar number to a length multiplier (float)
         self.wav_volumes = {}  # Maps WAV ID to volume (0-100) from #VOLUME
         self.bgm_wav_id = None
+        self.bgm_start_time_ms = 0.0
 
         # The final calculated event list
         self.timed_notes = []  # List of (time_in_ms, wav_id_str)
@@ -77,22 +95,39 @@ class Dtx:
         raw_events = []
 
         # --- First Pass: Gather all definitions from the file ---
-        content = []
-        # Try multiple encodings, with Shift-JIS (cp932) being common for DTX files.
-        for encoding in ["utf-16-le", "cp932", "utf-8-sig", "utf-8"]:
+        # Try to read the file with multiple encodings and choose the one that
+        # produces the most valid-looking DTX command lines (starting with '#').
+        best_content = None
+        best_encoding = None
+        max_command_lines = 0
+
+        # Common encodings for DTX files, with cp932 (Shift-JIS) often being correct.
+        for encoding in ["cp932", "utf-16-le", "utf-8-sig", "utf-8"]:
             try:
                 with open(self.dtx_path, "r", encoding=encoding) as f:
-                    content = f.readlines()
-                print(f"Successfully read file with encoding: {encoding}")
-                break
-            except (UnicodeDecodeError, UnicodeError):
-                continue
-            except Exception as e:
-                print(f"Error reading file with {encoding}: {e}")
+                    lines = f.readlines()
 
-        if not content:
-            print("Error: Could not read file with any of the attempted encodings.")
+                # Heuristic: The correct encoding should yield many command lines.
+                command_lines = sum(1 for line in lines if line.strip().startswith("#"))
+
+                if command_lines > max_command_lines:
+                    max_command_lines = command_lines
+                    best_content = lines
+                    best_encoding = encoding
+
+            except (UnicodeDecodeError, UnicodeError):
+                continue  # This encoding is incorrect, try the next one.
+            except Exception as e:
+                print(f"An unexpected error occurred while reading with {encoding}: {e}")
+
+        if not best_content:
+            print("Error: Could not read or decode the file with any supported encodings.")
             return
+
+        content = best_content
+        print(
+            f"Successfully read file using encoding '{best_encoding}' ({max_command_lines} command lines found)."
+        )
 
         for line in content:
             line = line.strip()
@@ -114,7 +149,9 @@ class Dtx:
                 except ValueError:
                     print(f"Warning: Invalid BPM value '{value}'")
             elif key.startswith("WAV") and value:
-                self.wav_files[key[3:]] = os.path.join(self.directory, value)
+                # Normalize path separators to handle DTX files from Windows
+                normalized_value = value.replace("\\", "/")
+                self.wav_files[key[3:]] = os.path.join(self.directory, normalized_value)
             elif key == "BGMWAV" and value:
                 self.bgm_wav_id = value
             elif key.startswith("BPM") and len(key) > 3 and value:
@@ -146,6 +183,10 @@ class Dtx:
                                 f"Warning: Invalid bar length value '{value}' for bar {bar_num}"
                             )
                     continue  # Do not process as a note event
+
+                # Ignore other non-note channels (visual, system, etc.)
+                if channel in self.NON_NOTE_CHANNELS:
+                    continue
 
                 if not value:
                     continue
@@ -206,6 +247,7 @@ class Dtx:
         current_time_s = 0.0
         current_bpm = self.bpm
         last_event_beat = 0.0
+        first_bgm_event_processed = False
 
         for event in raw_events:
             # Calculate time elapsed since the last event using the current BPM
@@ -216,7 +258,12 @@ class Dtx:
             # Process the event based on its channel to see if it's a note or a BPM change
             channel, value = event["channel"], event["val"]
 
-            if channel == "03":  # Direct BPM change (hexadecimal value)
+            if channel == "01":  # BGM event
+                if not first_bgm_event_processed:
+                    self.bgm_start_time_ms = event_time_s * 1000
+                    first_bgm_event_processed = True
+                # BGM events aren't notes, so we don't add them to the list.
+            elif channel == "03":  # Direct BPM change (hexadecimal value)
                 try:
                     current_bpm = float(int(value, 16))
                 except (ValueError, TypeError):
@@ -224,7 +271,7 @@ class Dtx:
             elif channel == "08":  # BPM change from predefined list
                 if value in self.bpm_changes:
                     current_bpm = self.bpm_changes[value]
-            elif channel != "01":  # Any other channel is a note (channel 01 is BGM)
+            else:  # Any other channel is a note.
                 self.timed_notes.append((event_time_s * 1000, channel, value))
 
             # Update state for the next iteration
@@ -246,7 +293,7 @@ class Player:
     SCREEN_HEIGHT = 600
 
     # New DTXMania-like layout constants
-    NUM_LANES = 9
+    NUM_LANES = 10
     LANE_WIDTH = 40
     NOTE_HIGHWAY_WIDTH = NUM_LANES * LANE_WIDTH
     NOTE_HIGHWAY_X_START = (SCREEN_WIDTH - NOTE_HIGHWAY_WIDTH) // 2
@@ -265,20 +312,22 @@ class Player:
 
     # --- Lane Configuration (DTXMania Style) ---
     # Defines the order and appearance of each drum lane from left to right.
+    # The 'color' is used for the static lane indicators at the bottom.
     LANE_DEFINITIONS = [
-        {"name": "L.Cym", "channels": ["1A"], "color": (220, 220, 0)},  # Yellow
-        {
-            "name": "H.H.",
-            "channels": ["11", "18", "1B"],
-            "color": (0, 180, 255),
-        },  # Light Blue
+        {"name": "L.Cym", "channels": ["1A"], "color": (255, 105, 180)},  # Hot Pink
+        {"name": "H.H.", "channels": ["11", "18"], "color": (0, 180, 255)},  # Light Blue
         {"name": "Snare", "channels": ["12"], "color": (255, 0, 100)},  # Red/Pink
-        {"name": "Kick", "channels": ["13"], "color": (200, 0, 200)},  # Purple
+        {
+            "name": "L.Foot",
+            "channels": ["1B", "1C"],
+            "color": (255, 255, 255),
+        },  # White Indicator
         {"name": "H.Tom", "channels": ["14"], "color": (0, 220, 0)},  # Green
-        {"name": "L.Tom", "channels": ["15"], "color": (0, 100, 255)},  # Blue
-        {"name": "F.Tom", "channels": ["17"], "color": (255, 0, 255)},  # Magenta
-        {"name": "Ride", "channels": ["19"], "color": (180, 220, 0)},  # Lime Green
-        {"name": "R.Cym", "channels": ["16"], "color": (220, 220, 0)},  # Yellow
+        {"name": "Kick", "channels": ["13"], "color": (255, 255, 255)},  # White Indicator
+        {"name": "L.Tom", "channels": ["15"], "color": (255, 0, 0)},  # Red
+        {"name": "F.Tom", "channels": ["17"], "color": (255, 165, 0)},  # Orange
+        {"name": "R.Cym", "channels": ["16"], "color": (0, 180, 255)},  # Blue
+        {"name": "Ride", "channels": ["19"], "color": (0, 180, 255)},  # Blue
     ]
 
     # Create a reverse map for quick channel-to-lane-index lookups.
@@ -289,9 +338,12 @@ class Player:
     }
 
     # Define specific colors for certain note types within a lane (e.g., Open Hi-Hat).
+    # This overrides the base note color.
     NOTE_TYPE_COLORS = {
-        "18": (100, 220, 255),  # H.H. Open - Brighter blue
-        "1B": (200, 0, 200),  # H.H. Pedal - Color matches Kick for visibility
+        "18": (100, 220, 255),  # H.H. Open - Brighter cyan
+        "1B": (255, 105, 180),  # H.H. Pedal - Hot Pink
+        "13": (200, 0, 200),  # Main Kick - Purple
+        "1C": (200, 0, 200),  # Left Kick - Purple
     }
 
     # --- Sound Mechanics Configuration ---
@@ -444,7 +496,7 @@ class Player:
                     lane_index = self.CHANNEL_TO_LANE_MAP[channel_id]
                     lane_def = self.LANE_DEFINITIONS[lane_index]
 
-                    # Get color, allowing for overrides for special notes like Open HH
+                    # Get color from the lane definition, allowing for overrides for special notes.
                     color = self.NOTE_TYPE_COLORS.get(channel_id, lane_def["color"])
 
                     x_pos = self.NOTE_HIGHWAY_X_START + lane_index * self.LANE_WIDTH
@@ -480,8 +532,10 @@ class Player:
                 lane_index = self.CHANNEL_TO_LANE_MAP[channel_id]
                 lane_def = self.LANE_DEFINITIONS[lane_index]
 
-                # Brighten the base lane color for the animation
-                color = tuple(min(c + 80, 255) for c in lane_def["color"])
+                # Brighten the note's actual color for the animation flash.
+                # This ensures special notes (like open HH) have the right color flash.
+                note_color = self.NOTE_TYPE_COLORS.get(channel_id, lane_def["color"])
+                color = tuple(min(c + 80, 255) for c in note_color)
 
                 x_pos = self.NOTE_HIGHWAY_X_START + lane_index * self.LANE_WIDTH
                 rect = pygame.Rect(
@@ -511,7 +565,9 @@ class Player:
 
         notes_to_play = self.dtx.timed_notes[:]
         note_index = 0
-        self.time_offset_ms = 0  # Reset offset at the start of every playback
+        # The time offset is used to sync the chart's timeline with the
+        # audio playback timeline. It's initialized with the BGM's start time.
+        self.time_offset_ms = self.dtx.bgm_start_time_ms
 
         screen = pygame.display.set_mode((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
         pygame.display.set_caption(f"Playing: {self.dtx.title} - {self.dtx.artist}")
@@ -602,8 +658,14 @@ class Player:
                             # gentle fade-out before repositioning
                             pygame.mixer.music.fadeout(self.bgm_fade_ms)
                             self.time_offset_ms = new_time_ms
+
+                            # Calculate the correct starting position within the BGM file
+                            # by subtracting the initial BGM offset from the target chart time.
+                            music_start_pos_ms = new_time_ms - self.dtx.bgm_start_time_ms
+                            music_start_pos_s = max(0, music_start_pos_ms / 1000.0)
+
                             pygame.mixer.music.play(
-                                start=new_time_ms / 1000.0, fade_ms=self.bgm_fade_ms
+                                start=music_start_pos_s, fade_ms=self.bgm_fade_ms
                             )
 
                         # Find the new note index
